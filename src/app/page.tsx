@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PARKS_MAP } from "@/lib/constants";
 import { FIELD_TYPES } from "@/lib/fieldTypes";
@@ -17,6 +17,11 @@ interface ParkResult {
   slots: BookedSlot[];
   error?: string;
 }
+
+// Session-level cache: borough → fetched park data
+// CSV data covers all dates so one fetch per borough per session is enough.
+// Switching sports or dates never needs a refetch — all filtering is client-side.
+const sessionCache = new Map<string, ParkResult[]>();
 
 function todayStr(): string {
   const d = new Date();
@@ -55,8 +60,16 @@ export default function Home() {
     [allParkIds, borough]
   );
 
+  // handleSearch only depends on borough (via parkIdsForBorough).
+  // Date range and sport are client-side filters — they never trigger a refetch.
   const handleSearch = useCallback(async () => {
-    if (!startDate || !endDate) return;
+    // Return cached data instantly if we've already fetched this borough
+    if (sessionCache.has(borough)) {
+      setParkData(sessionCache.get(borough)!);
+      setSearched(true);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setLoadProgress(0);
@@ -82,6 +95,7 @@ export default function Home() {
         );
       }
 
+      sessionCache.set(borough, results);
       setParkData(results);
       setSearched(true);
     } catch (err) {
@@ -89,10 +103,16 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [startDate, endDate, parkIdsForBorough]);
+  }, [borough, parkIdsForBorough]);
 
-  // Auto-load on mount with defaults (Manhattan, Basketball, this week)
-  useEffect(() => { handleSearch(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-load whenever borough changes (including initial mount).
+  // Cached boroughs are instant; uncached ones show the progress bar.
+  const prevBorough = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevBorough.current === borough) return;
+    prevBorough.current = borough;
+    handleSearch();
+  }, [borough, handleSearch]);
 
   const parsedStart = useMemo(
     () => (startDate ? new Date(startDate + "T00:00:00") : null),
@@ -105,47 +125,35 @@ export default function Home() {
 
   const daySpan = useMemo(() => {
     if (!parsedStart || !parsedEnd) return 0;
-    return (
-      Math.round(
-        (parsedEnd.getTime() - parsedStart.getTime()) / 86400000
-      ) + 1
-    );
+    return Math.round((parsedEnd.getTime() - parsedStart.getTime()) / 86400000) + 1;
   }, [parsedStart, parsedEnd]);
 
   const isValid =
-    startDate &&
-    endDate &&
-    parsedStart &&
-    parsedEnd &&
-    parsedStart <= parsedEnd &&
-    daySpan <= 31;
+    startDate && endDate && parsedStart && parsedEnd &&
+    parsedStart <= parsedEnd && daySpan <= 31;
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {/* Header */}
       <header className="border-b border-white/10 bg-gray-950/80 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18M9 21V9" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="text-base font-semibold leading-tight">NYC Parks Field Availability</h1>
-              <p className="text-xs text-gray-500">Live permit data · {allParkIds.length} parks</p>
-            </div>
+        <div className="max-w-screen-xl mx-auto px-6 py-4 flex items-center gap-3">
+          <div className="w-8 h-8 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-emerald-400">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-base font-semibold leading-tight">NYC Parks Field Availability</h1>
+            <p className="text-xs text-gray-500">Live permit data · {allParkIds.length} parks</p>
           </div>
         </div>
       </header>
 
       <main className="max-w-screen-xl mx-auto px-6 py-6">
-
-        {/* Controls — all on one panel */}
         <div className="bg-gray-900 border border-white/10 rounded-xl p-5 mb-6 space-y-5">
 
-          {/* Field type — primary filter, shown first */}
+          {/* Field type */}
           <div>
             <label className="text-xs font-medium text-gray-400 uppercase tracking-wide block mb-2">
               Field Type
@@ -167,7 +175,7 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Borough — second filter */}
+          {/* Borough */}
           <div>
             <label className="text-xs font-medium text-gray-400 uppercase tracking-wide block mb-2">
               Borough
@@ -188,11 +196,14 @@ export default function Home() {
               ))}
               <span className="self-center text-xs text-gray-600 ml-1">
                 {parkIdsForBorough.length} parks
+                {sessionCache.has(borough) && (
+                  <span className="ml-1 text-emerald-700">· cached</span>
+                )}
               </span>
             </div>
           </div>
 
-          {/* Date range + search */}
+          {/* Date range — client-side filter only, no refetch */}
           <div className="flex flex-wrap gap-4 items-end">
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium text-gray-400 uppercase tracking-wide">From</label>
@@ -213,11 +224,15 @@ export default function Home() {
               />
             </div>
             <button
-              onClick={handleSearch}
+              onClick={() => {
+                // Force re-fetch by clearing cache for this borough
+                sessionCache.delete(borough);
+                handleSearch();
+              }}
               disabled={!isValid || loading}
-              className="px-6 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors"
+              className="px-5 py-2 rounded-lg bg-gray-800 hover:bg-gray-700 border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium transition-colors text-gray-300"
             >
-              {loading ? "Loading…" : "Search"}
+              {loading ? "Loading…" : "Refresh"}
             </button>
             {daySpan > 31 && (
               <p className="text-xs text-rose-400 self-center">Max 31 days</p>
@@ -241,7 +256,6 @@ export default function Home() {
           )}
         </div>
 
-        {/* Error */}
         {error && (
           <div className="bg-rose-950/40 border border-rose-500/30 rounded-xl p-4 mb-6 text-rose-300 text-sm">
             <strong>Error:</strong> {error}
@@ -269,10 +283,9 @@ export default function Home() {
           </div>
         )}
 
-        {/* Empty state */}
         {!searched && !loading && (
           <div className="text-center py-20 text-gray-700">
-            <p className="text-base font-medium">Choose a field type, borough, and date range</p>
+            <p className="text-base font-medium">Loading…</p>
           </div>
         )}
       </main>

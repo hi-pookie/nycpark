@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { BookedSlot } from "@/lib/types";
 import { dateRangeDays, formatMinutes } from "@/lib/parseCSV";
 import { getBoroughFromId } from "@/lib/constants";
-import { matchesFieldType } from "@/lib/fieldTypes";
+import { matchesFieldType, matchesSportColumn, SPORT_COLUMN_TYPES } from "@/lib/fieldTypes";
 
 interface Props {
   parkData: Array<{
@@ -95,9 +95,6 @@ export default function AvailabilityCalendar({
     [startDate, endDate]
   );
 
-  // Build fieldMap keyed by "parkId|fieldName"
-  // Filter by field name (not sport) — Basketball-01 is always a basketball court
-  // Show ALL bookings on matching fields regardless of what sport was booked
   const fieldMap = useMemo(() => {
     type Entry = {
       parkId: string;
@@ -110,27 +107,46 @@ export default function AvailabilityCalendar({
     };
     const map = new Map<string, Entry>();
 
-    for (const park of parkData) {
-      for (const slot of park.slots) {
-        if (!matchesFieldType(slot.field, fieldType)) continue;
+    function addSlot(park: { parkId: string; parkName: string }, slot: BookedSlot) {
+      const key = `${park.parkId}|${slot.field}`;
+      if (!map.has(key)) {
+        map.set(key, { parkId: park.parkId, parkName: park.parkName, fieldName: slot.field, days: {} });
+      }
+      const entry = map.get(key)!;
+      if (!entry.days[slot.dateKey]) entry.days[slot.dateKey] = [];
+      entry.days[slot.dateKey].push({
+        start: slot.startMinutes,
+        end: slot.endMinutes,
+        sport: slot.sport,
+        org: slot.organization || slot.eventName,
+      });
+    }
 
-        const key = `${park.parkId}|${slot.field}`;
-        if (!map.has(key)) {
-          map.set(key, {
-            parkId: park.parkId,
-            parkName: park.parkName,
-            fieldName: slot.field,
-            days: {},
-          });
+    if (SPORT_COLUMN_TYPES.has(fieldType)) {
+      // Sports with no dedicated field names (Bocce, Frisbee, etc.)
+      // Pass 1: find every field that has ever had a permit for this sport
+      const eligibleKeys = new Set<string>();
+      for (const park of parkData) {
+        for (const slot of park.slots) {
+          if (matchesSportColumn(slot.sport, fieldType)) {
+            eligibleKeys.add(`${park.parkId}|${slot.field}`);
+          }
         }
-        const entry = map.get(key)!;
-        if (!entry.days[slot.dateKey]) entry.days[slot.dateKey] = [];
-        entry.days[slot.dateKey].push({
-          start: slot.startMinutes,
-          end: slot.endMinutes,
-          sport: slot.sport,
-          org: slot.organization || slot.eventName,
-        });
+      }
+      // Pass 2: add ALL bookings on those fields so availability is accurate
+      for (const park of parkData) {
+        for (const slot of park.slots) {
+          if (eligibleKeys.has(`${park.parkId}|${slot.field}`)) {
+            addSlot(park, slot);
+          }
+        }
+      }
+    } else {
+      // Sports with dedicated named fields — filter by field name
+      for (const park of parkData) {
+        for (const slot of park.slots) {
+          if (matchesFieldType(slot.field, fieldType)) addSlot(park, slot);
+        }
       }
     }
 
@@ -206,20 +222,6 @@ export default function AvailabilityCalendar({
             </tr>
           </thead>
           <tbody>
-            {fields.map((field, idx) => {
-              const prevBorough = idx > 0 ? fields[idx - 1].parkId[0] : null;
-              const showBoroughHeader = field.parkId[0] !== prevBorough;
-
-              return (
-                <tr key={`${field.parkId}|${field.fieldName}`}>
-                  {showBoroughHeader && (
-                    // Borough divider rendered as first cell content via a preceding row
-                    // handled below — this tr is the data row
-                    null
-                  )}
-                </tr>
-              );
-            })}
             {fields.map((field, idx) => {
               const prevBorough = idx > 0 ? fields[idx - 1].parkId[0] : null;
               const showBoroughHeader = field.parkId[0] !== prevBorough;
