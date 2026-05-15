@@ -163,8 +163,11 @@ export default function AvailabilityCalendar({
   if (fields.length === 0) {
     return (
       <div className="text-center py-16 text-gray-500">
-        <p className="text-base">No <strong className="text-gray-300">{fieldType}</strong> fields found in this data.</p>
-        <p className="text-sm mt-1 text-gray-600">Try a different borough or widen the date range.</p>
+        <p className="text-base">No <strong className="text-gray-300">{fieldType}</strong> permit records found in this borough.</p>
+        <p className="text-sm mt-1 text-gray-600">
+          NYC Parks has no {fieldType.toLowerCase()} permit history here — either no permits have been issued,
+          or this sport is played informally without permits. Try a different borough.
+        </p>
       </div>
     );
   }
