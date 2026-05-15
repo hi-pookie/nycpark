@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { BookedSlot } from "@/lib/types";
 import { dateRangeDays, formatMinutes } from "@/lib/parseCSV";
 import { getBoroughFromId } from "@/lib/constants";
-import { matchesFieldType, matchesSportColumn, SPORT_COLUMN_TYPES } from "@/lib/fieldTypes";
+import { matchesFieldType, matchesSportColumn } from "@/lib/fieldTypes";
 
 interface Props {
   parkData: Array<{
@@ -122,30 +122,27 @@ export default function AvailabilityCalendar({
       });
     }
 
-    if (SPORT_COLUMN_TYPES.has(fieldType)) {
-      // Sports with no dedicated field names (Bocce, Frisbee, etc.)
-      // Pass 1: find every field that has ever had a permit for this sport
-      const eligibleKeys = new Set<string>();
-      for (const park of parkData) {
-        for (const slot of park.slots) {
-          if (matchesSportColumn(slot.sport, fieldType)) {
-            eligibleKeys.add(`${park.parkId}|${slot.field}`);
-          }
+    // Pass 1: find eligible fields — match by field name OR sport column.
+    // Field name catches dedicated courts ("Football-01" for Football).
+    // Sport column catches multi-use fields that hosted the sport but aren't
+    // named after it (e.g. "Midland Beach-Baseball-04" used for football in SI).
+    const eligibleKeys = new Set<string>();
+    for (const park of parkData) {
+      for (const slot of park.slots) {
+        if (
+          matchesFieldType(slot.field, fieldType) ||
+          matchesSportColumn(slot.sport, fieldType)
+        ) {
+          eligibleKeys.add(`${park.parkId}|${slot.field}`);
         }
       }
-      // Pass 2: add ALL bookings on those fields so availability is accurate
-      for (const park of parkData) {
-        for (const slot of park.slots) {
-          if (eligibleKeys.has(`${park.parkId}|${slot.field}`)) {
-            addSlot(park, slot);
-          }
-        }
-      }
-    } else {
-      // Sports with dedicated named fields — filter by field name
-      for (const park of parkData) {
-        for (const slot of park.slots) {
-          if (matchesFieldType(slot.field, fieldType)) addSlot(park, slot);
+    }
+    // Pass 2: add ALL bookings on eligible fields so availability is accurate —
+    // any permit on the field blocks it, not just permits for this sport.
+    for (const park of parkData) {
+      for (const slot of park.slots) {
+        if (eligibleKeys.has(`${park.parkId}|${slot.field}`)) {
+          addSlot(park, slot);
         }
       }
     }
